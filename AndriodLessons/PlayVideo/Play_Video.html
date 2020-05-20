@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>前端播放m3u8格式视频</title>
+    <link href="https://vjs.zencdn.net/7.4.1/video-js.css" rel="stylesheet">
+    <script src='https://vjs.zencdn.net/7.4.1/video.js'></script>
+    <!-- videojs-contrib-hls 用于在电脑端播放 如果只需手机播放可以不引入 -->
+    <script src="https://cdn.bootcdn.net/ajax/libs/videojs-contrib-hls/5.15.0/videojs-contrib-hls.min.js"></script>
+</head>
+
+<body>
+<style>
+    .video-js .vjs-tech {position: relative !important;}
+</style>
+<div>
+    <video id="myVideo" class="video-js vjs-default-skin vjs-big-play-centered" controls preload="auto" data-setup='{}' style='width: 60%;height: auto'>
+        <source id="source" src="http://1252043158.vod2.myqcloud.com/1d93b969vodtranscq1252043158/2098466b5285890800631818428/drm/v.f220.m3u8" type="application/x-mpegURL"></source>
+    </video>
+</div>
+<div class="qiehuan" style="width:100px;height: 100px;background: red;margin:0 auto;line-height: 100px;color:#fff;text-align: center">切换视频</div>
+</body>
+<script>
+    // videojs 简单使用
+    var myVideo = videojs('myVideo', {
+        bigPlayButton: true,
+        textTrackDisplay: false,
+        posterImage: false,
+        errorDisplay: false,
+    })
+    myVideo.play()// 视频播放
+    myVideo.pause() // 视频暂停
+    var changeVideo = function (vdoSrc) {
+        if (/\.m3u8$/.test(vdoSrc)) { //判断视频源是否是m3u8的格式
+            myVideo.src({
+                src: vdoSrc,
+                type: 'application/x-mpegURL' //在重新添加视频源的时候需要给新的type的值
+            })
+        } else {
+            myVideo.src(vdoSrc)
+        }
+        myVideo.load();
+        myVideo.play();
+
+    }
+    var src = 'http://1252043158.vod2.myqcloud.com/1d93b969vodtranscq1252043158/2098466b5285890800631818428/drm/v.f220.m3u8';
+    document.querySelector('.qiehuan').addEventListener('click', function () {
+        changeVideo(src);
+    })
+</script>
+</html>

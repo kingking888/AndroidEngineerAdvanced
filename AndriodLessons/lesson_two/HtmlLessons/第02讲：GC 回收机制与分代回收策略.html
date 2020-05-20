@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>第02讲：GC 回收机制与分代回收策略</title>
+</head>
+<body>
+<p>本课时我们讲解 GC 回收机制与分代回收策略。</p>
+<p>垃圾回收（Garbage Collection，简写为 GC）可能是虚拟机众多知识点中最为大众所熟知的一个了，也是Java开发者最关注的一块知识点。Java 语言开发者比 C 语言开发者幸福的地方就在于，我们不需要手动释放对象的内存，JVM 中的垃圾回收器（Garbage Collector）会为我们自动回收。但是这种幸福是有代价的：一旦这种自动化机制出错，我们又不得不去深入理解 GC 回收机制，甚至需要对这些“自动化”的技术实施必要的监控和调节。</p>
+<p>上一节课我介绍了 Java 内存运行时区域的各个部分，其中程序计数器、虚拟机栈、本地方法栈 3 个区域随线程而生，随线程而灭；栈中的栈帧随着方法的进入和退出而有条不紊地执行着出栈和入栈操作，这几个区域内不需要过多考虑回收的问题。</p>
+<p>而堆和方法区则不一样，一个接口中的多个实现类需要的内存可能不一样，一个方法中的多个分支需要的内存也可能不一样，我们只有在程序处于运行期间时才能知道会创建哪些对象，这部分内存的分配和回收都是动态的，垃圾收集器所关注的就是这部分内存。</p>
+<h3>什么是垃圾</h3>
+<p>所谓垃圾就是内存中已经没有用的对象。 既然是”垃圾回收"，那就必须知道哪些对象是垃圾。Java 虚拟机中使用一种叫作"**可达性分析”**的算法来决定对象是否可以被回收。</p>
+<h4>可达性分析</h4>
+<p>可达性分析算法是从离散数学中的图论引入的，JVM 把内存中所有的对象之间的引用关系看作一张图，通过一组名为”GC Root"的对象作为起始点，从这些节点开始向下搜索，搜索所走过的路径称为引用链，最后通过判断对象的引用链是否可达来决定对象是否可以被回收。如下图所示：</p>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/7C/9B/Cgq2xl58leGAIoKxAAEZWYE_v08477.png" alt=""></p>
+<p>比如上图中，对象A/B/C/D/E 与 GC Root 之间都存在一条直接或者间接的引用链，这也代表它们与 GC Root 之间是可达的，因此它们是不能被 GC 回收掉的。而对象M和K虽然被对J 引用到，但是并不存在一条引用链连接它们与 GC Root，所以当 GC 进行垃圾回收时，只要遍历到 J/K/M 这 3 个对象，就会将它们回收。</p>
+<blockquote>
+<p><strong>注意</strong>：上图中圆形图标虽然标记的是对象，但实际上代表的是此对象在内存中的引用。包括 GC Root 也是一组引用而并非对象。</p>
+</blockquote>
+<h4>GC Root 对象</h4>
+<p>在 Java 中，有以下几种对象可以作为 GC Root：</p>
+<ol>
+<li>Java 虚拟机栈（局部变量表）中的引用的对象。</li>
+<li>方法区中静态引用指向的对象。</li>
+<li>仍处于存活状态中的线程对象。</li>
+<li>Native 方法中 JNI 引用的对象。</li>
+</ol>
+<h3>什么时候回收</h3>
+<p>不同的虚拟机实现有着不同的 GC 实现机制，但是一般情况下每一种 GC 实现都会在以下两种情况下触发垃圾回收。</p>
+<ol>
+<li><strong>Allocation Failure</strong>：在堆内存中分配时，如果因为可用剩余空间不足导致对象内存分配失败，这时系统会触发一次 GC。</li>
+<li><strong>System.gc()</strong>：在应用层，Java 开发工程师可以主动调用此 API 来请求一次 GC。</li>
+</ol>
+<h3>代码验证 GC Root 的几种情况</h3>
+<p>现在我们了解了 Java 中的 GC Root，以及何时触发 GC，接下来就通过几个案例来验证 GC Root 的情况。在看具体代码之前，我们先了解一个执行 Java 命令时的参数。</p>
+<blockquote>
+<p>-Xms 初始分配 JVM 运行时的内存大小，如果不指定默认为物理内存的 1/64。</p>
+</blockquote>
+<p>比如我们运行如下命令执行 HelloWorld 程序，从物理内存中分配出 200M 空间分配给 JVM 内存。</p>
+<pre><code data-language="c" class="lang-c">java -Xms200m HelloWorld
+</code></pre>
+<h4>验证虚拟机栈（栈帧中的局部变量）中引用的对象作为 GC Root</h4>
+<p>我们运行如下代码：</p>
+<pre><code data-language="java" class="lang-java"><span class="hljs-keyword">public</span> <span class="hljs-class"><span class="hljs-keyword">class</span> <span class="hljs-title">GCRootLocalVariable</span> </span>{
+    <span class="hljs-keyword">private</span> <span class="hljs-keyword">int</span> _10MB = <span class="hljs-number">10</span> * <span class="hljs-number">1024</span> * <span class="hljs-number">1024</span>;
+    <span class="hljs-keyword">private</span> <span class="hljs-keyword">byte</span>[] memory = <span class="hljs-keyword">new</span> <span class="hljs-keyword">byte</span>[<span class="hljs-number">8</span> * _10MB];
+
+    <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-keyword">static</span> <span class="hljs-keyword">void</span> <span class="hljs-title">main</span><span class="hljs-params">(String[] args)</span></span>{
+        System.out.println(<span class="hljs-string">"开始时:"</span>);
+        printMemory();
+        method();
+        System.gc();
+        System.out.println(<span class="hljs-string">"第二次GC完成"</span>);
+        printMemory();
+    }
+
+    <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-keyword">static</span> <span class="hljs-keyword">void</span> <span class="hljs-title">method</span><span class="hljs-params">()</span> </span>{
+        GCRootLocalVariable g = <span class="hljs-keyword">new</span> GCRootLocalVariable();
+        System.gc();
+        System.out.println(<span class="hljs-string">"第一次GC完成"</span>);
+        printMemory();
+    }
+
+    <span class="hljs-comment">/**
+     * 打印出当前JVM剩余空间和总的空间大小
+     */</span>
+    <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-keyword">static</span> <span class="hljs-keyword">void</span> <span class="hljs-title">printMemory</span><span class="hljs-params">()</span> </span>{
+        System.out.print(<span class="hljs-string">"free is "</span> + Runtime.getRuntime().freeMemory()/<span class="hljs-number">1024</span>/<span class="hljs-number">1024</span> + <span class="hljs-string">" M, "</span>);
+        System.out.println(<span class="hljs-string">"total is "</span> + Runtime.getRuntime().totalMemory()/<span class="hljs-number">1024</span>/<span class="hljs-number">1024</span> + <span class="hljs-string">" M, "</span>);
+    }
+}
+</code></pre>
+<p>打印日志：</p>
+<pre><code data-language="java" class="lang-java">开始时:
+free is <span class="hljs-number">242</span> M, total is <span class="hljs-number">245</span> M,
+第一次GC完成
+free is <span class="hljs-number">163</span> M, total is <span class="hljs-number">245</span> M,
+第二次GC完成
+free is <span class="hljs-number">243</span> M, total is <span class="hljs-number">245</span> M,
+</code></pre>
+<p>可以看出：</p>
+<ul>
+<li>当第一次 GC 时，g 作为局部变量，引用了 new 出的对象（80M），并且它作为 GC Roots，在 GC 后并不会被 GC 回收。</li>
+<li>当第二次 GC：method() 方法执行完后，局部变量 g 跟随方法消失，不再有引用类型指向该 80M 对象，所以第二次 GC 后此 80M 也会被回收。</li>
+</ul>
+<blockquote>
+<p><strong>注意</strong>：上面日志包括后面的实例中，因为有中间变量，所以会有 1M 左右的误差，但不影响我们分析 GC 过程。</p>
+</blockquote>
+<h4>验证方法区中的静态变量引用的对象作为 GC Root</h4>
+<p>我们运行如下代码：</p>
+<pre><code data-language="java" class="lang-java"><span class="hljs-keyword">public</span> <span class="hljs-class"><span class="hljs-keyword">class</span> <span class="hljs-title">GCRootStaticVariable</span></span>{
+    <span class="hljs-keyword">private</span> <span class="hljs-keyword">static</span> <span class="hljs-keyword">int</span> _10MB = <span class="hljs-number">10</span> * <span class="hljs-number">1024</span> * <span class="hljs-number">1024</span>;
+    <span class="hljs-keyword">private</span> <span class="hljs-keyword">byte</span>[] memory;
+    <span class="hljs-keyword">private</span> <span class="hljs-keyword">static</span> GCRootStaticVariable staticVariable;
+
+    <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-title">GCRootStaticVariable</span><span class="hljs-params">(<span class="hljs-keyword">int</span> size)</span> </span>{
+        memory = <span class="hljs-keyword">new</span> <span class="hljs-keyword">byte</span>[size];
+    }
+
+    <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-keyword">static</span> <span class="hljs-keyword">void</span> <span class="hljs-title">main</span><span class="hljs-params">(String[] args)</span></span>{
+        System.out.println(<span class="hljs-string">"程序开始:"</span>);
+        printMemory();
+        GCRootStaticVariable g = <span class="hljs-keyword">new</span> GCRootStaticVariable(<span class="hljs-number">4</span> * _10MB);
+        g.staticVariable = <span class="hljs-keyword">new</span> GCRootStaticVariable(<span class="hljs-number">8</span> * _10MB);
+        <span class="hljs-comment">// 将g置为null, 调用GC时可以回收此对象内存</span>
+        g = <span class="hljs-keyword">null</span>;
+        System.gc();
+        System.out.println(<span class="hljs-string">"GC完成"</span>);
+        printMemory();
+    }
+
+    <span class="hljs-comment">/**
+     * 打印出当前JVM剩余空间和总的空间大小
+     */</span>
+    <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-keyword">static</span> <span class="hljs-keyword">void</span> <span class="hljs-title">printMemory</span><span class="hljs-params">()</span> </span>{
+        System.out.print(<span class="hljs-string">"free is "</span> + Runtime.getRuntime().freeMemory()/<span class="hljs-number">1024</span>/<span class="hljs-number">1024</span> + <span class="hljs-string">" M, "</span>);
+        System.out.println(<span class="hljs-string">"total is "</span> + Runtime.getRuntime().totalMemory()/<span class="hljs-number">1024</span>/<span class="hljs-number">1024</span> + <span class="hljs-string">" M, "</span>);
+    }
+}
+</code></pre>
+<p>打印日志：</p>
+<pre><code data-language="java" class="lang-java">程序开始:
+free is <span class="hljs-number">242</span> M, total is <span class="hljs-number">245</span> M,
+GC完成
+free is <span class="hljs-number">163</span> M, total is <span class="hljs-number">245</span> M,
+</code></pre>
+<p>可以看出：</p>
+<p>程序刚开始运行时内存为 242M，并分别创建了 g 对象（40M），同时也初始化 g 对象内部的静态变量 staticVariable 对象（80M）。当调用 GC 时，只有 g 对象的 40M 被 GC 回收掉，而静态变量 staticVariable 作为 GC Root，它引用的 80M 并不会被回收。</p>
+<h4>验证活跃线程作为 GC Root</h4>
+<p>我们运行如下代码：</p>
+<pre><code data-language="java" class="lang-java"><span class="hljs-keyword">public</span> <span class="hljs-class"><span class="hljs-keyword">class</span> <span class="hljs-title">GCRootThread</span></span>{
+
+    <span class="hljs-keyword">private</span> <span class="hljs-keyword">int</span> _10MB = <span class="hljs-number">10</span> * <span class="hljs-number">1024</span> * <span class="hljs-number">1024</span>;
+    <span class="hljs-keyword">private</span> <span class="hljs-keyword">byte</span>[] memory = <span class="hljs-keyword">new</span> <span class="hljs-keyword">byte</span>[<span class="hljs-number">8</span> * _10MB];
+
+    <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-keyword">static</span> <span class="hljs-keyword">void</span> <span class="hljs-title">main</span><span class="hljs-params">(String[] args)</span> <span class="hljs-keyword">throws</span> Exception </span>{
+        System.out.println(<span class="hljs-string">"开始前内存情况:"</span>);
+        printMemory();
+        AsyncTask at = <span class="hljs-keyword">new</span> AsyncTask(<span class="hljs-keyword">new</span> GCRootThread());
+        Thread thread = <span class="hljs-keyword">new</span> Thread(at);
+        thread.start();
+        System.gc();
+        System.out.println(<span class="hljs-string">"main方法执行完毕，完成GC"</span>);
+        printMemory();
+
+        thread.join();
+        at = <span class="hljs-keyword">null</span>;
+        System.gc();
+        System.out.println(<span class="hljs-string">"线程代码执行完毕，完成GC"</span>);
+        printMemory();
+    }
+
+    <span class="hljs-comment">/**
+     * 打印出当前JVM剩余空间和总的空间大小
+     */</span>
+    <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-keyword">static</span> <span class="hljs-keyword">void</span> <span class="hljs-title">printMemory</span><span class="hljs-params">()</span> </span>{
+        System.out.print(<span class="hljs-string">"free is "</span> + Runtime.getRuntime().freeMemory()/<span class="hljs-number">1024</span>/<span class="hljs-number">1024</span> + <span class="hljs-string">" M, "</span>);
+        System.out.println(<span class="hljs-string">"total is "</span> + Runtime.getRuntime().totalMemory()/<span class="hljs-number">1024</span>/<span class="hljs-number">1024</span> + <span class="hljs-string">" M, "</span>);
+    }
+
+    <span class="hljs-keyword">private</span> <span class="hljs-keyword">static</span> <span class="hljs-class"><span class="hljs-keyword">class</span> <span class="hljs-title">AsyncTask</span> <span class="hljs-keyword">implements</span> <span class="hljs-title">Runnable</span> </span>{
+        <span class="hljs-keyword">private</span> GCRootThread gcRootThread;
+
+        <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-title">AsyncTask</span><span class="hljs-params">(GCRootThread gcRootThread)</span></span>{
+            <span class="hljs-keyword">this</span>.gcRootThread = gcRootThread;
+        }
+
+        <span class="hljs-meta">@Override</span>
+        <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-keyword">void</span> <span class="hljs-title">run</span><span class="hljs-params">()</span> </span>{
+            <span class="hljs-keyword">try</span>{
+                Thread.sleep(<span class="hljs-number">500</span>);
+            } <span class="hljs-keyword">catch</span>(Exception e){}
+        }
+    }
+}
+</code></pre>
+<p>打印日志：</p>
+<pre><code data-language="java" class="lang-java">开始前内存情况:
+free is <span class="hljs-number">242</span> M, total is <span class="hljs-number">245</span> M,
+main方法执行完毕，完成GC
+free is <span class="hljs-number">163</span> M, total is <span class="hljs-number">245</span> M,
+线程代码执行完毕，完成GC
+free is <span class="hljs-number">243</span> M, total is <span class="hljs-number">245</span> M,
+</code></pre>
+<p>可以看出：</p>
+<p>程序刚开始时是 242M 内存，当调用第一次 GC 时线程并没有执行结束，并且它作为 GC Root，所以它所引用的 80M 内存并不会被 GC 回收掉。 thread.join() 保证线程结束再调用后续代码，所以当调用第二次 GC 时，线程已经执行完毕并被置为 null，这时线程已经被销毁，所以之前它所引用的 80M 此时会被 GC 回收掉。</p>
+<h4>测试成员变量是否可作为 GC Root</h4>
+<p>我们运行如下代码：</p>
+<pre><code data-language="java" class="lang-java"><span class="hljs-keyword">public</span> <span class="hljs-class"><span class="hljs-keyword">class</span> <span class="hljs-title">GCRootClassVariable</span></span>{
+
+    <span class="hljs-keyword">private</span> <span class="hljs-keyword">static</span> <span class="hljs-keyword">int</span> _10MB = <span class="hljs-number">10</span> * <span class="hljs-number">1024</span> * <span class="hljs-number">1024</span>;
+    <span class="hljs-keyword">private</span> <span class="hljs-keyword">byte</span>[] memory;
+    <span class="hljs-keyword">private</span> GCRootClassVariable classVariable;
+
+    <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-title">GCRootClassVariable</span><span class="hljs-params">(<span class="hljs-keyword">int</span> size)</span></span>{
+        memory = <span class="hljs-keyword">new</span> <span class="hljs-keyword">byte</span>[size];
+    }
+
+    <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-keyword">static</span> <span class="hljs-keyword">void</span> <span class="hljs-title">main</span><span class="hljs-params">(String[] args)</span></span>{
+        System.out.println(<span class="hljs-string">"程序开始:"</span>);
+        printMemory();
+        GCRootClassVariable g = <span class="hljs-keyword">new</span> GCRootClassVariable(<span class="hljs-number">4</span> * _10MB);
+        g.classVariable = <span class="hljs-keyword">new</span> GCRootClassVariable(<span class="hljs-number">8</span> * _10MB);
+        g = <span class="hljs-keyword">null</span>;
+        System.gc();
+        System.out.println(<span class="hljs-string">"GC完成"</span>);
+        printMemory();
+    }
+
+    <span class="hljs-comment">/**
+     * 打印出当前JVM剩余空间和总的空间大小
+     */</span>
+    <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-keyword">static</span> <span class="hljs-keyword">void</span> <span class="hljs-title">printMemory</span><span class="hljs-params">()</span> </span>{
+        System.out.print(<span class="hljs-string">"free is "</span> + Runtime.getRuntime().freeMemory()/<span class="hljs-number">1024</span>/<span class="hljs-number">1024</span> + <span class="hljs-string">" M, "</span>);
+        System.out.println(<span class="hljs-string">"total is "</span> + Runtime.getRuntime().totalMemory()/<span class="hljs-number">1024</span>/<span class="hljs-number">1024</span> + <span class="hljs-string">" M, "</span>);
+    }
+}
+</code></pre>
+<p>打印日志：</p>
+<pre><code data-language="java" class="lang-java">程序开始:
+free is <span class="hljs-number">242</span> M, total is <span class="hljs-number">245</span> M,
+GC完成
+free is <span class="hljs-number">243</span> M, total is <span class="hljs-number">245</span> M,
+</code></pre>
+<p>从上面日志中可以看出当调用 GC 时，因为 g 已经置为 null，因此 g 中的全局变量 classVariable 此时也不再被 GC Root 所引用。所以最后 g(40M) 和 classVariable(80M) 都会被回收掉。<strong>这也表明全局变量同静态变量不同，它不会被当作 GC Root</strong>。</p>
+<blockquote>
+<p>上面演示的这几种情况往往也是内存泄漏发生的场景，设想一下我们将各个 Test 类换成 Android 中的 Activity 的话将导致 Activity 无法被系统回收，而一个 Activity 中的数据往往是较大的，因此内存泄漏导致 Activity 无法回收还是比较致命的。</p>
+</blockquote>
+<h3>如何回收垃圾</h3>
+<p>由于垃圾收集算法的实现涉及大量的程序细节，各家虚拟机厂商对其实现细节各不相同，因此本课时并不会过多的讨论算法的实现，只是介绍几种算法的思想以及优缺点。</p>
+<h4>标记清除算法（Mark and Sweep GC）</h4>
+<p>从”GC Roots”集合开始，将内存整个遍历一次，保留所有可以被 GC Roots 直接或间接引用到的对象，而剩下的对象都当作垃圾对待并回收，过程分两步。</p>
+<ol>
+<li><strong>Mark 标记阶段</strong>：找到内存中的所有 GC Root 对象，只要是和 GC Root 对象直接或者间接相连则标记为灰色（也就是存活对象），否则标记为黑色（也就是垃圾对象）。</li>
+<li><strong>Sweep 清除阶段</strong>：当遍历完所有的 GC Root 之后，则将标记为垃圾的对象直接清除。</li>
+</ol>
+<p>如下图所示：</p>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/03/81/Ciqah158kR-AFqC0AACRJFj-tqc381.png" alt=""></p>
+<ul>
+<li><strong>优点</strong>：实现简单，不需要将对象进行移动。</li>
+<li><strong>缺点</strong>：这个算法需要中断进程内其他组件的执行（stop the world），并且可能产生内存碎片，提高了垃圾回收的频率。</li>
+</ul>
+<h4>复制算法（Copying）</h4>
+<p>将现有的内存空间分为两快，每次只使用其中一块，在垃圾回收时将正在使用的内存中的存活对象复制到未被使用的内存块中。之后，清除正在使用的内存块中的所有对象，交换两个内存的角色，完成垃圾回收。</p>
+<ol>
+<li>复制算法之前，内存分为 A/B 两块，并且当前只使用内存 A，内存的状况如下图所示：</li>
+</ol>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/7C/97/Cgq2xl58kR-AfKs5AABx53v9UCk063.png" alt=""></p>
+<ol start="2">
+<li>标记完之后，所有可达对象都被按次序复制到内存 B 中，并设置 B 为当前使用中的内存。内存状况如下图所示：</li>
+</ol>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/03/81/Ciqah158kR-AQa1cAABq_Yx6zyw527.png" alt=""></p>
+<ul>
+<li><strong>优点</strong>：按顺序分配内存即可，实现简单、运行高效，不用考虑内存碎片。</li>
+<li><strong>缺点</strong>：可用的内存大小缩小为原来的一半，对象存活率高时会频繁进行复制。</li>
+</ul>
+<h4>标记-压缩算法 (Mark-Compact)</h4>
+<p>需要先从根节点开始对所有可达对象做一次标记，之后，它并不简单地清理未标记的对象，而是将所有的存活对象压缩到内存的一端。最后，清理边界外所有的空间。因此标记压缩也分两步完成：</p>
+<ol>
+<li><strong>Mark 标记阶段</strong>：找到内存中的所有 GC Root 对象，只要是和 GC Root 对象直接或者间接相连则标记为灰色（也就是存活对象），否则标记为黑色（也就是垃圾对象）。</li>
+<li><strong>Compact 压缩阶段</strong>：将剩余存活对象按顺序压缩到内存的某一端。<br>
+<img src="https://s0.lgstatic.com/i/image3/M01/7C/97/Cgq2xl58kR-AQb0SAAAl99yZMSc183.png" alt=""></li>
+</ol>
+<ul>
+<li><strong>优点</strong>：这种方法既避免了碎片的产生，又不需要两块相同的内存空间，因此，其性价比比较高。</li>
+<li><strong>缺点</strong>：所谓压缩操作，仍需要进行局部对象移动，所以一定程度上还是降低了效率。</li>
+</ul>
+<h3>JVM分代回收策略</h3>
+<p>Java 虚拟机根据对象存活的周期不同，把堆内存划分为几块，一般分为<strong>新生代</strong>、<strong>老年代</strong>，这就是 JVM 的内存分代策略。<strong>注意: 在 HotSpot 中除了新生代和老年代，还有永久代</strong></p>
+<p>分代回收的中心思想就是：对于新创建的对象会在新生代中分配内存，此区域的对象生命周期一般较短。如果经过多次回收仍然存活下来，则将它们转移到老年代中。</p>
+<h4>年轻代（Young Generation）</h4>
+<p>新生成的对象优先存放在新生代中，新生代对象朝生夕死，存活率很低，在新生代中，常规应用进行一次垃圾收集一般可以回收 70%~95% 的空间，回收效率很高。新生代中因为要进行一些复制操作，所以一般采用的 GC 回收算法是复制算法。</p>
+<p>新生代又可以继续细分为 3 部分：Eden、Survivor0（简称 S0）、Survivor1（简称S1）。这 3 部分按照 8:1:1 的比例来划分新生代。这 3 块区域的内存分配过程如下：</p>
+<p>绝大多数刚刚被创建的对象会存放在 <strong>Eden</strong> 区。如图所示：</p>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/03/81/Ciqah158kSCACECoAABYMXWFYtY758.png" alt=""></p>
+<p>当 <strong>Eden</strong> 区第一次满的时候，会进行垃圾回收。首先将 <strong>Eden</strong>区的垃圾对象回收清除，并将存活的对象复制到 <strong>S0</strong>，此时 <strong>S1</strong>是空的。如图所示：<br>
+<img src="https://s0.lgstatic.com/i/image3/M01/7C/97/Cgq2xl58kSGACeimAABTArM3xYk676.png" alt=""></p>
+<p>下一次 <strong>Eden</strong> 区满时，再执行一次垃圾回收。此次会将 <strong>Eden</strong>和 <strong>S0</strong>区中所有垃圾对象清除，并将存活对象复制到 <strong>S1</strong>，此时 <strong>S0</strong>变为空。如图所示：</p>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/03/81/Ciqah158kSGAXW6uAABTZbbBBQU172.png" alt=""></p>
+<p>如此反复在 <strong>S0</strong> 和 <strong>S1</strong>之间切换几次（默认 15 次）之后，如果还有存活对象。说明这些对象的生命周期较长，则将它们转移到老年代中。如图所示：</p>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/7C/97/Cgq2xl58kSGAIFsJAABiXFUZ3JU251.png" alt=""></p>
+<h4>年老代（Old Generation）</h4>
+<p>一个对象如果在新生代存活了足够长的时间而没有被清理掉，则会被复制到老年代。老年代的内存大小一般比新生代大，能存放更多的对象。如果对象比较大（比如长字符串或者大数组），并且新生代的剩余空间不足，则这个大对象会直接被分配到老年代上。</p>
+<p>我们可以使用 -XX:PretenureSizeThreshold 来控制直接升入老年代的对象大小，大于这个值的对象会直接分配在老年代上。老年代因为对象的生命周期较长，不需要过多的复制操作，所以一般采用标记压缩的回收算法。</p>
+<blockquote>
+<p><strong>注意</strong>：对于老年代可能存在这么一种情况，老年代中的对象有时候会引用到新生代对象。这时如果要执行新生代 GC，则可能需要查询整个老年代上可能存在引用新生代的情况，这显然是低效的。所以，老年代中维护了一个 512 byte 的 card table，所有老年代对象引用新生代对象的信息都记录在这里。每当新生代发生 GC 时，只需要检查这个 card table 即可，大大提高了性能。</p>
+</blockquote>
+<h3>GC Log 分析</h3>
+<p>为了让上层应用开发人员更加方便的调试 Java 程序，JVM 提供了相应的 GC 日志。在 GC 执行垃圾回收事件的过程中，会有各种相应的 log 被打印出来。其中新生代和老年代所打印的日志是有区别的。</p>
+<ul>
+<li>新生代 GC：这一区域的 GC 叫作 Minor GC。因为 Java 对象大多都具备朝生夕灭的特性，所以 Minor GC 非常频繁，一般回收速度也比较快。</li>
+<li>老年代 GC：发生在这一区域的 GC 也叫作 Major GC 或者 Full GC。当出现了 Major GC，经常会伴随至少一次的 Minor GC。</li>
+</ul>
+<blockquote>
+<p>注意：在有些虚拟机实现中，Major GC 和 Full GC 还是有一些区别的。Major GC 只是代表回收老年代的内存，而 Full GC 则代表回收整个堆中的内存，也就是新生代 + 老年代。</p>
+</blockquote>
+<p>接下来就通过几个案例来分析如何查看 GC Log，分析这些 GC Log 的过程中也能再加深对 JVM 分代策略的理解。</p>
+<p>首先我们需要理解几个 Java 命令的参数：</p>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/7C/9B/Cgq2xl58lmeAAsp5AABwifdCuEw841.png" alt=""></p>
+<p>我使用如下代码，在内存中创建 4 个 byte 类型数组来演示内存分配与 GC 的详细过程。代码如下：</p>
+<pre><code data-language="java" class="lang-java"><span class="hljs-comment">/**
+* VM agrs: -Xms20M -Xmx20M -Xmn10M -XX:+PrintGCDetails
+* -XX:SurvivorRatio=8
+*/</span>
+<span class="hljs-keyword">public</span> <span class="hljs-class"><span class="hljs-keyword">class</span> <span class="hljs-title">MinorGCTest</span> </span>{
+    <span class="hljs-keyword">private</span> <span class="hljs-keyword">static</span> <span class="hljs-keyword">final</span> <span class="hljs-keyword">int</span> _1MB = <span class="hljs-number">1024</span> * <span class="hljs-number">1024</span>;
+
+    <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-keyword">static</span> <span class="hljs-keyword">void</span> <span class="hljs-title">testAllocation</span><span class="hljs-params">()</span> </span>{
+        <span class="hljs-keyword">byte</span>[] a1, a2, a3, z4;
+        a1 = <span class="hljs-keyword">new</span> <span class="hljs-keyword">byte</span>[<span class="hljs-number">2</span> * _1MB];
+        a2 = <span class="hljs-keyword">new</span> <span class="hljs-keyword">byte</span>[<span class="hljs-number">2</span> * _1MB];
+        a3 = <span class="hljs-keyword">new</span> <span class="hljs-keyword">byte</span>[<span class="hljs-number">2</span> * _1MB];
+        a4 = <span class="hljs-keyword">new</span> <span class="hljs-keyword">byte</span>[<span class="hljs-number">1</span> * _1MB];
+    }
+
+    <span class="hljs-function"><span class="hljs-keyword">public</span> <span class="hljs-keyword">static</span> <span class="hljs-keyword">void</span> <span class="hljs-title">main</span><span class="hljs-params">(String[] agrs)</span> </span>{
+        testAllocation();
+    }
+}
+</code></pre>
+<p>通过上面的参数，可以看出堆内存总大小为 20M，其中新生代占 10M，剩下的 10M 会自动分配给老年代。执行上述代码打印日志如下：</p>
+<pre><code data-language="java" class="lang-java">Heap
+PSYoungGen      total <span class="hljs-number">9216</span>K, used <span class="hljs-number">8003</span>K [<span class="hljs-number">0x00000007bf600000</span>, <span class="hljs-number">0x00000007c0000000</span>, <span class="hljs-number">0x00000007c0000000</span>)
+  eden space <span class="hljs-number">8192</span>K, <span class="hljs-number">97</span>% used [<span class="hljs-number">0x00000007bf600000</span>,<span class="hljs-number">0x00000007bfdd0ed8</span>,<span class="hljs-number">0x00000007bfe00000</span>)
+  from space <span class="hljs-number">1024</span>K, <span class="hljs-number">0</span>% used [<span class="hljs-number">0x00000007bff00000</span>,<span class="hljs-number">0x00000007bff00000</span>,<span class="hljs-number">0x00000007c0000000</span>)
+  to   space <span class="hljs-number">1024</span>K, <span class="hljs-number">0</span>% used [<span class="hljs-number">0x00000007bfe00000</span>,<span class="hljs-number">0x00000007bfe00000</span>,<span class="hljs-number">0x00000007bff00000</span>)
+ParOldGen       total <span class="hljs-number">10240</span>K, used <span class="hljs-number">0</span>K [<span class="hljs-number">0x00000007bec00000</span>, <span class="hljs-number">0x00000007bf600000</span>, <span class="hljs-number">0x00000007bf600000</span>)
+  object space <span class="hljs-number">10240</span>K, <span class="hljs-number">0</span>% used [<span class="hljs-number">0x00000007bec00000</span>,<span class="hljs-number">0x00000007bec00000</span>,<span class="hljs-number">0x00000007bf600000</span>)
+Metaspace       used <span class="hljs-number">2631</span>K, capacity <span class="hljs-number">4486</span>K, committed <span class="hljs-number">4864</span>K, reserved <span class="hljs-number">1056768</span>K
+  <span class="hljs-class"><span class="hljs-keyword">class</span> <span class="hljs-title">space</span>    <span class="hljs-title">used</span> 286<span class="hljs-title">K</span>, <span class="hljs-title">capacity</span> 386<span class="hljs-title">K</span>, <span class="hljs-title">committed</span> 512<span class="hljs-title">K</span>, <span class="hljs-title">reserved</span> 1048576<span class="hljs-title">K</span>
+</span></code></pre>
+<p>日志中的各字段代表意义如下：</p>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/03/85/Ciqah158lqGAOkbpAAAvHYLJUt0639.png" alt=""></p>
+<p>从日志中可以看出：程序执行完之后，a1、a2、a3、a4 四个对象都被分配在了新生代的 Eden 区。</p>
+<p>如果我们将测试代码中的 a4 初始化改为 a4 = new byte[2 * _1MB] 则打印日志如下：</p>
+<pre><code data-language="java" class="lang-java">[GC (Allocation Failure) [PSYoungGen: <span class="hljs-number">6815</span>K-><span class="hljs-number">480</span>K(<span class="hljs-number">9216</span>K)] <span class="hljs-number">6815</span>K-><span class="hljs-number">6632</span>K(<span class="hljs-number">19456</span>K), <span class="hljs-number">0.0067344</span> secs] [Times: user=<span class="hljs-number">0.04</span> sys=<span class="hljs-number">0.00</span>, real=<span class="hljs-number">0.01</span> secs]
+Heap
+PSYoungGen      total <span class="hljs-number">9216</span>K, used <span class="hljs-number">2130</span>K [<span class="hljs-number">0x00000007bf600000</span>, <span class="hljs-number">0x00000007c0000000</span>, <span class="hljs-number">0x00000007c0000000</span>)
+  eden space <span class="hljs-number">8192</span>K, <span class="hljs-number">26</span>% used [<span class="hljs-number">0x00000007bf600000</span>,<span class="hljs-number">0x00000007bf814930</span>,<span class="hljs-number">0x00000007bfe00000</span>)
+  from space <span class="hljs-number">1024</span>K, <span class="hljs-number">0</span>% used [<span class="hljs-number">0x00000007bfe00000</span>,<span class="hljs-number">0x00000007bfe00000</span>,<span class="hljs-number">0x00000007bff00000</span>)
+  to   space <span class="hljs-number">1024</span>K, <span class="hljs-number">0</span>% used [<span class="hljs-number">0x00000007bff00000</span>,<span class="hljs-number">0x00000007bff00000</span>,<span class="hljs-number">0x00000007c0000000</span>)
+ParOldGen       total <span class="hljs-number">10240</span>K, used <span class="hljs-number">6420</span>K [<span class="hljs-number">0x00000007bec00000</span>, <span class="hljs-number">0x00000007bf600000</span>, <span class="hljs-number">0x00000007bf600000</span>)
+  object space <span class="hljs-number">10240</span>K, <span class="hljs-number">62</span>% used [<span class="hljs-number">0x00000007bec00000</span>,<span class="hljs-number">0x00000007bf2450d0</span>,<span class="hljs-number">0x00000007bf600000</span>)
+Metaspace       used <span class="hljs-number">2632</span>K, capacity <span class="hljs-number">4486</span>K, committed <span class="hljs-number">4864</span>K, reserved <span class="hljs-number">1056768</span>K
+  <span class="hljs-class"><span class="hljs-keyword">class</span> <span class="hljs-title">space</span>    <span class="hljs-title">used</span> 286<span class="hljs-title">K</span>, <span class="hljs-title">capacity</span> 386<span class="hljs-title">K</span>, <span class="hljs-title">committed</span> 512<span class="hljs-title">K</span>, <span class="hljs-title">reserved</span> 1048576<span class="hljs-title">K</span>
+</span></code></pre>
+<p>这是因为在给 a4 分配内存之前，Eden 区已经被占用 6M。已经无法再分配出 2M 来存储 a4 对象。因此会执行一次 Minor GC。并尝试将存活的 a1、a2、a3 复制到 S1 区。但是 S1 区只有 1M 空间，所以没有办法存储 a1、a2、a3 任意一个对象。在这种情况下 a1、a2、a3 将被转移到老年代，最后将 a4 保存在 Eden 区。<strong>所以最终结果就是：Eden 区占用 2M（a4），老年代占用 6M（a1、a2、a3）。</strong></p>
+<blockquote>
+<p>通过这个测试案例，我们也间接验证了 JVM 的内存分配和分代回收策略。如果你感兴趣可以在课下尝试使用各种命令参数，给堆的新生代和老年代设置不同的大小来验证不同的结果。</p>
+</blockquote>
+<h4>再谈引用</h4>
+<p>上文中已经介绍过，判断对象是否存活我们是通过GC Roots的引用可达性来判断的。但是JVM中的引用关系并不止一种，而是有四种，根据引用强度的由强到弱，他们分别是:<strong>强引用</strong>(Strong Reference)、<strong>软引用</strong>(Soft Reference)、<strong>弱引用</strong>(Weak Reference)、<strong>虚引用</strong>(Phantom Reference)。</p>
+<p>任何一本Java面试书籍都会对这四种引用做简单对比，我用一张表格来表示如下：</p>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/03/85/Ciqah158ltqAHyEHAACoLz2II_g092.png" alt=""></p>
+<p>平时项目中，尤其是Android项目，因为有大量的图像(Bitmap)对象，使用软引用的场景较多。所以重点看下软引用SoftReference的使用，不当的使用软引用有时也会导致系统异常。</p>
+<h4>软引用常规使用</h4>
+<p>常规使用代码如下：</p>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/05/F7/Ciqah16B6smATzkwAAL0Suw9ZmQ406.png" alt=""></p>
+<p>执行上述代码，打印日志如下：</p>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/7C/97/Cgq2xl58kSGAFUHRAACFBaOn7hI672.png" alt=""></p>
+<p>首先通过-Xmx将堆最大内存设置为200M。从日志中可以看出，当第一次GC时，内存中还有剩余可用内存，所以软引用并不会被GC回收。但是当我们再次创建一个120M的强引用时，JVM可用内存已经不够，所以会尝试将软引用给回收掉。</p>
+<h4>软引用隐藏问题</h4>
+<p>需要注意的是，被软引用对象关联的对象会自动被垃圾回收器回收，但是软引用对象本身也是一个对象，这些创建的软引用并不会自动被垃圾回收器回收掉。比如如下代码：</p>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/03/81/Ciqah158kSKACYQrAAHi5SOybBQ812.png" alt=""></p>
+<p>上述代码，虽然每一个SoftObject都被一个软引用所引用，在内存紧张时，GC会将SoftObject所占用的1KB回收。但是每一个SoftReference又都被Set所引用(强引用)。执行上述代码结果如下：</p>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/7C/97/Cgq2xl58kSKANSWJAADApye5msQ014.png" alt=""></p>
+<p>限制堆内存大小为4M，最终程序崩溃，但是异常的原因并不是普通的堆内存溢出，而是"GC overhead"。之所以会抛出这个错误，是由于虚拟机一直在不断回收软引用，回收进行的速度过快，占用的cpu过大(超过98%)，并且每次回收掉的内存过小(小于2%)，导致最终抛出了这个错误。</p>
+<p>这里需要做优化，合适的处理方式是注册一个引用队列，每次循环之后将引用队列中出现的软引用对象从cache中移除。如下所示：</p>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/03/81/Ciqah158kSOAcJtVAAMtvCkCXt0643.png" alt=""></p>
+<p>再次运行修改后的代码，结果如下：</p>
+<p><img src="https://s0.lgstatic.com/i/image3/M01/7C/97/Cgq2xl58kSOAMcDMAADVGDMKO7w664.png" alt=""></p>
+<p>可以看出优化后，程序可以正常执行完。并且在执行过程中会动态的将集合中的软引用删除。</p>
+<p>更多详细 SoftReference 的介绍，可以参考 、<a href="https://mp.weixin.qq.com/s/XRCq3IDdGJt3Nq9Mu23U5g">Java虚拟机究竟是如何处理SoftReference的</a> 。</p>
+<h3>总结：</h3>
+<p>本课时着重讲解了 JVM 中有关垃圾回收的相关知识点，其中重点介绍了使用可达性分析来判断对象是否可以被回收，以及 3 种垃圾回收算法。最后通过分析 GC Log 验证了 Java 虚拟机中内存分配及分代策略的一些细节。</p>
+<p>虚拟机垃圾回收机制很多时候都是影响系统性能、并发能力的主要因素之一。尤其是对于从事 Android 开发的工程师来说，有时候垃圾回收会很大程度上影响 UI 线程，并造成界面卡顿现象。因此理解垃圾回收机制并学会分析 GC Log 也是一项必不可少的技能。后续我会在 DVM 课时中，详细介绍 Android 虚拟机中对垃圾回收所做的优化。</p>
+</body>
+</html>

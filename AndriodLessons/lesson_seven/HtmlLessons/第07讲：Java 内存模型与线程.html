@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>第07讲：Java 内存模型与线程</title>
+</head>
+<body>
+<p style="line-height: 1.75em; text-align: justify;"></p>
+<p style="text-align:justify;line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">本课时我们将进入 Java 内存模型的学习。</span></p>
+<p style="text-align:justify;line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="text-align:justify;line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">Java 内存模型一词翻译自 Java Memory Model，简称 JMM，它所描述的是多线程并发、CPU 缓存等方面的内容，这里需要注意不要将它与课时 01 讲到的 JVM 内存结构混淆。</span></p>
+<h1><p><span style="color: rgb(3, 1, 1); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">为什么有 Java 内存模型</span></p></h1>
+<p style="text-align:justify;line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(3, 1, 1); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">网上大多数文章在介绍 JMM 时，都会引用《深入理解 Java 虚拟机》中的一张图，如下：</span></p>
+<p style="text-align:justify;line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="text-align:justify;line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><img src="https://s0.lgstatic.com/i/image3/M01/0F/5C/Ciqah16VdfyAKW4PAADwKkKf3ho258.png" style="font-size: 11pt; font-family: 微软雅黑, "Microsoft YaHei";"><br></p>
+<p style="text-align:justify;line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="text-align:justify;line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">上图描述的意思是，在每一个线程中，都会有一块内部的工作内存（working memory）。这块工作内存保存了主内存共享数据的拷贝副本。在第 1 课时中，我们了解到在 JVM 内存结构中有一块线程独享的内存空间——虚拟机栈，所以这里我们会自然而然的将线程工作内存理解为虚拟机栈。 </span></p>
+<p style="text-align:justify;line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="text-align:justify;line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">实际上，这种理解是不准确的！虚拟机栈和线程的工作内存并不是一个概念。在 Java 线程中并不存在所谓的工作内存（working memory），<strong>它只是对 CPU </strong><strong style="color: rgb(3, 1, 1);color: #030101;">寄存器和高速缓存的抽象描述</strong>。    </span></p>
+<h2><p><span style="color: rgb(3, 1, 1); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">CPU 普及</span></p></h2>
+<p style="text-align:justify;line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">你可能会感到奇怪，怎么突然又扯到 CPU 了？作为一个程序员，尤其是 Java 程序员，我们都应该知道线程是 CPU 调度的最小单位，线程中的字节码指令最终都是在 CPU 中执行的。CPU在执行的时候，免不了要和各种数据打交道，而 Java 中所有数据都是存放在主内存（RAM）当中的，这一过程可以参考下图：</span></p>
+<p style="text-align:justify;line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="text-align:justify;line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><img src="https://s0.lgstatic.com/i/image3/M01/88/72/Cgq2xl6VddeAEMpoAAB8hyBTG6s068.png" style="color: rgb(63, 63, 63); font-family: 微软雅黑, "Microsoft YaHei"; font-size: 16px;"><br></p>
+<p style="text-align:justify;line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">随着 CPU 技术的发展，CPU 的执行速度越来越快，但内存的技术并没有太大的变化，所以在内存中读取和写入数据的过程和 CPU 的执行速度比起来差距会越来越大，也就是上图中箭头部分。CPU 对主内存的访问需要等待较长的时间，这样就体现不出 CPU 超强运算能力的优势了。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">因此，为了“压榨”处理性能，达到“高并发”的效果，在 CPU 中添加了高速缓存 （cache）来作为缓冲。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><img src="https://s0.lgstatic.com/i/image3/M01/0F/5B/Ciqah16VddeAQQn6AACp-HxFwfo279.png" style="color: rgb(63, 63, 63); font-family: 微软雅黑, "Microsoft YaHei"; font-size: 16px;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">在执行任务时，CPU 会先将运算所需要使用到的数据复制到高速缓存中，让运算能够快速进行，当运算完成之后，再将缓存中的结果刷回（flush back）主内存，这样 CPU 就不用等待主内存的读写操作了。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"><span style="font-family: 微软雅黑, "Microsoft YaHei"; color: rgb(51, 51, 51); font-size: 12pt;">一切看起来很美好，但是问题也随之而来。每个处理器都有自己的高速缓存，同时又共同操作同一块主内存，当多个处理器同时操作主内存时，可能导致数据不一致，这就是是</span><strong style="color: rgb(51, 51, 51);color: #333333;font-size: 12pt;font-family: ">缓存一致性</strong><span style="font-family: 微软雅黑, "Microsoft YaHei"; color: rgb(51, 51, 51); font-size: 12pt;">问题。</span></span></p>
+<h2><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">缓存一致性问题</span></p></h2>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">现在市面上的手机通常有两个或者多个 CPU，其中一些 CPU 还有多核。每个 CPU 在某一时刻都能运行一个线程，这就意味着，如果你的 Java 程序是多线程的，那么就有可能存在多个线程在同一时刻被不同的CPU执行的情况。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">比如我们有如下一段代码：</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><img src="https://s0.lgstatic.com/i/image3/M01/88/72/Cgq2xl6VddeAJK0xAACKS-ON00w242.png" style="color: rgb(63, 63, 63); font-family: 微软雅黑, "Microsoft YaHei"; font-size: 16px;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">这里我定义了两个变量 x 和 y ，它们的初始值都为 0。 </span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">在线程 p1 中，将 x 赋值给局部变量 r1，然后将 y 重新设为 1 。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">在线程 p2 中，将 y 赋值给局部变量 r2，然后将 x 重新设为 2。 </span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">假设我们的一台设备上有 2 个 CPU，分别为 C1 和 C2，我们将上面这段代码执行在这台设备上，最后打印出的 r1 和 r2 值分别是多少？ 答案是不确定的。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<blockquote>
+ <p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">r1 = 0，r2 = 1</span></p>
+</blockquote>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">假设 p1 先在 C1 中执行完毕，并成功刷新回主内存中，此时 r1 = 0, x = 0, y = 1。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">然后 p2 在 C2 中执行，从主内存中加载 y = 1 并赋值给 r2，此时 r2 = 1, x = 2, y = 1</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<blockquote>
+ <p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">r1 = 2，r2 = 0</span></p>
+</blockquote>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">假设 p2 先在 C1 中执行完毕，并成功刷新回主内存中，此时 r2 = 0, x = 2, y = 0。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">然后 p1 在 C2 中执行，从主内存中加载 y = 1 并赋值给 r2，此时 r1 = 2, x = 2, y = 1。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">上述两种情况比较明显，当某些情况下还会出现另一种情况</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<blockquote>
+ <p><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">r1 = 0，r2 = 0</span></p>
+</blockquote>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">x 和 y 的值分别缓存在 C1 和 C2 的缓存中 。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">首先 p1 在 C1 中执行完毕，但是并未将结果刷新回主内存中，此时主内存中的 x = 0，y = 0。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">然后 p2 在 C2 中执行，缓存中的 y = 0，将其赋值给 r2，此时 r2 = 0, x = 2, y = 1</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">如下图所示：</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><img src="https://s0.lgstatic.com/i/image3/M01/88/72/Cgq2xl6VddiAO02sAAAe6xTnBlI145.png" style="color: rgb(63, 63, 63); font-family: 微软雅黑, "Microsoft YaHei"; font-size: 16px;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">可以看出，虽然在 C1 和 C2 的缓存中，分别修改了 x 和 y 的值，但是并未将它们刷新回主内存中，这就是缓存一致性问题。</span></p>
+<h2><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">指令重排</span></p></h2>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">除了缓存一致性问题，还存在另外一种硬件问题，也比较重要：为了使 CPU 内部的运算单元能够尽量被充分利用，处理器可能会对输入的字节码指令进行重排序处理，也就是处理器优化。除了 CPU 之外，很多编程语言的编译器也会有类似的优化，比如 Java虚拟机的即时编译器（JIT）也会做指令重排。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">以下面的代码为例：</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="text-align:center"><img src="https://s0.lgstatic.com/i/image3/M01/88/72/Cgq2xl6VddiAFch6AAANXK2e6Ic978.png" style="color: rgb(63, 63, 63); font-family: 微软雅黑, "Microsoft YaHei"; font-size: 16px;"></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">编译之后的字节码指令如下： </span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"></span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51);color: #333333;font-size: 12pt;font-family: "> </span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51);color: #333333;font-size: 12pt;font-family: "> </span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51);color: #333333;font-size: 12pt;font-family: "><br></span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51);color: #333333;font-size: 12pt;font-family: "><img src="https://s0.lgstatic.com/i/image3/M01/88/72/Cgq2xl6Vdk2ADgOkAAEolgP7ZVw813.png"></span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51);color: #333333;font-size: 12pt;font-family: "><br></span></p>
+<p><br></p>
+<p><br></p>
+<p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"></span></p>
+<p><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">可以看出在上述指令中，有两处指令表达的是同样的语义，并且指令 7 并不依赖指令 2 和指令 3。在这种情况下，CPU 会对指令的顺序做优化，如下： </span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><img src="https://s0.lgstatic.com/i/image3/M01/0F/5B/Ciqah16VddmAMhEsAAGv_L-gOOI288.png" style="color: rgb(63, 63, 63); font-family: 微软雅黑, "Microsoft YaHei"; font-size: 16px;"></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">从 Java 语言的角度看这层优化就是：</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><img src="https://s0.lgstatic.com/i/image3/M01/88/72/Cgq2xl6VddmAe3StAACvXj7iPyM456.png" style="color: rgb(63, 63, 63); font-family: 微软雅黑, "Microsoft YaHei"; font-size: 16px;"></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">也就是说在 CPU 层面，有时候代码并不会严格按照 Java 文件中的顺序去执行。再看一下之前 r1/r2 的实例，刚才我们分析会有 3 种情况发生，其实在极端情况下，还会出现第 4 种情况：</span></p>
+<blockquote>
+ <p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">r1 = 2，r2 = 1</span></p>
+</blockquote>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">线程 p2 中的代码经过 CPU 优化之后，会被重排序为：</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><img src="https://s0.lgstatic.com/i/image3/M01/88/72/Cgq2xl6VdnCAI0SsAAEI1td3ZTw250.png" style="color: rgb(51, 51, 51); font-size: 12pt; font-family: 微软雅黑, "Microsoft YaHei";"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">经过优化之后，p2 线程将 x 赋值为 2，这时 CPU 将时间片段分配给线程 p1，线程 p1 在执行过程中，将 r1 赋值为 x，此时 x = 2，所以 r1 的值为 2。然后将 y 赋值为 1，此时 CPU 再将时间片段重新分配给 p2。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">代码回到 p2 中，将 y 值赋值给 r2，此时 y = 1，所以 r2 = 1，整个过程如下图所示：</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><img src="https://s0.lgstatic.com/i/image3/M01/0F/5B/Ciqah16VddqAPWm2AAF1DtJNPU4827.png" style="color: rgb(63, 63, 63); font-family: 微软雅黑, "Microsoft YaHei"; font-size: 16px;"></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">图中红色图标代表代码执行的顺序。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">上面两小部分内容表明，如果我们任由 CPU 优化或者编译器指令重排，那我们编写的 Java 代码最终执行效果可能会极大的出乎意料。为了解决这个问题，让 Java 代码在不同硬件、不同操作系统中，输出的结果达到一致，Java 虚拟机规范提出了一套机制——Java 内存模型。</span></p>
+<h1><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">什么是内存模型</span></p></h1>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">内存模型是一套共享内存系统中多线程读写操作行为的规范，这套规范屏蔽了底层各种硬件和操作系统的内存访问差异，解决了 CPU 多级缓存、CPU 优化、指令重排等导致的内存访问问题，从而保证 Java 程序（尤其是多线程程序）在各种平台下对内存的访问效果一致。 </span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">在 Java 内存模型中，我们统一用工作内存（working memory）来当作 CPU 中寄存器或高速缓存的抽象。线程之间的共享变量存储在主内存（main memory）中，每个线程都有一个私有工作内存（类比 CPU 中的寄存器或者高速缓存），本地工作内存中存储了该线程读/写共享变量的副本。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">在这套规范中，有一个非常重要的规则——happens-before。</span></p>
+<h2><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">happens-before 先行发生原则</span></p></h2>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">happens-before 用于描述两个操作的内存可见性，通过保证可见性的机制可以让应用程序免于数据竞争干扰。它的定义如下： </span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">如果一个操作 A happens-before 另一个操作 B，那么操作 A 的执行结果将对操作 B 可见。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">上述定义我们也可以反过来理解：如果操作 A 的结果需要对另外一个操作 B 可见，那么操作 A 必须 happens-before 操作 B。 </span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">用以下代码来举例： </span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="text-align:center"><img src="https://s0.lgstatic.com/i/image3/M01/88/72/Cgq2xl6VddqAHxY1AABNG3yvW-c927.png" style="color: rgb(63, 63, 63); font-family: 微软雅黑, "Microsoft YaHei"; font-size: 16px;"></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">假设 setValue 就是操作 A，getValue 就是操作 B。如果我们先后在两个线程中调用 A 和 B，那最后在 B 操作中返回的 value 值是多少呢？有以下两种情况：</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"><br></span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"> </span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"><strong style="color: rgb(51, 51, 51);color: #333333;font-size: 12pt;font-family: ">如果 A happens-before B 不成立</strong></span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">也就是说当线程调用操作 B（getValue）时，即使操作 A（setValue）已经在其他线程中被调用过，并且 value 也被成功设置为 1，但这个修改对于操作 B（getValue）仍然是不可见的。根据之前我们介绍的 CPU 缓存，value 值有可能返回 0，也有可能返回 1。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"><br></span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"><strong style="color: rgb(51, 51, 51);color: #333333;font-size: 12pt;font-family: "> </strong></span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"><strong style="color: rgb(51, 51, 51);color: #333333;font-size: 12pt;font-family: ">如果 A happens-before B 成立</strong></span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">根据 happens-before 的定义，先行发生动作的结果，对后续发生动作是可见的。也就是说如果我们先在一个线程中调用了操作 A（setValue）方法，那么这个修改后的结果对后续的操作 B（getValue）始终可见。因此如果先调用 setValue 将 value 赋值为 1 后，后续在其他线程中调用 getValue 的值一定是 1。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">那在 Java 中的两个操作如何就算符合 happens-before 规则了呢？ JMM 中定义了以下几种情况是自动符合 happens-before 规则的： </span></p>
+<h3><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"><strong style="color: rgb(51, 51, 51);color: #333333;font-size: 12pt;font-family: ">程序次序规则</strong></span></p></h3>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">在单线程内部，如果一段代码的字节码顺序也隐式符合 happens-before 原则，那么逻辑顺序靠前的字节码执行结果一定是对后续逻辑字节码可见，只是后续逻辑中不一定用到而已。比如以下代码：</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"><br></span></p>
+<pre>int a = 10;  // 1
+b = b + 1;   // 2</pre>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"><br></span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">当代码执行到 2 处时，a = 10 这个结果已经是公之于众的，至于用没用到 a 这个结果则不一定。比如上面代码就没有用到 a = 10 的结果，说明 b 对 a 的结果没有依赖，这样就有可能发生指令重排。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">但是如果将代码改为如下则不会发生指令重排优化：</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"><br></span></p>
+<pre>int a = 10;  // 1
+b = b + a;   // 2</pre>
+<h3><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">锁定规则</span></p></h3>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">无论是在单线程环境还是多线程环境，一个锁如果处于被锁定状态，那么必须先执行 unlock 操作后才能进行 lock 操作。</span></p>
+<h3><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">变量规则</span></p></h3>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">volatile 保证了线程可见性。通俗讲就是如果一个线程先写了一个 volatile 变量，然后另外一个线程去读这个变量，那么这个写操作一定是 happens-before 读操作的。</span></p>
+<h3><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">线程启动规则</span></p></h3>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">Thread 对象的 start() 方法先行发生于此线程的每一个动作。假定线程 A 在执行过程中，通过执行 ThreadB.start() 来启动线程 B，那么线程 A 对共享变量的修改在线程 B 开始执行后确保对线程 B 可见。</span></p>
+<h3><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">线程中断规则</span></p></h3>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">对线程 interrupt() 方法的调用先行发生于被中断线程的代码检测，直到中断事件的发生。</span></p>
+<h3><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">线程终结规则</span></p></h3>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">线程中所有的操作都发生在线程的终止检测之前，我们可以通过 Thread.join() 方法结束、Thread.isAlive() 的返回值等方法检测线程是否终止执行。假定线程 A 在执行的过程中，通过调用 ThreadB.join() 等待线程 B 终止，那么线程 B 在终止之前对共享变量的修改在线程 A 等待返回后可见。</span></p>
+<h3><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">对象终结规则</span></p></h3>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">一个对象的初始化完成发生在它的 finalize() 方法开始前。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">此外， happens-before 原则还具有传递性：如果操作 A happens-before 操作 B，而操作 B happens-before 操作 C，则操作 A 一定 happens-before 操作 C。 </span></p>
+<h1><p><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">Java 内存模型应用 </span></p></h1>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">上面介绍的 happens-before 原则非常重要，它是判断数据是否存在竞争、线程是否安全的主要依据，根据这个原则，我们能够解决在并发环境下操作之间是否可能存在冲突的所有问题。在此基础上，我们可以通过 Java 提供的一系列关键字，将我们自己实现的多线程操作“happens-before 化”。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">"happens-before 化”就是将本来不符合 happens-before 原则的某些操作，通过某种手段使它们符合 happens-before 原则。</span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"> </span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">比如我还是用上面的 setValue 和 getValue 举例，本来这两个操作是不符合 happens-before 原则的，但是我们可以通过以下两种方式，使它们符合 happens-before 原则。 </span></p>
+<h2><p><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">使用 volatile 修饰 value </span></p></h2>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"> </span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51);color: #333333;font-size: 12pt;font-family: "><img src="https://s0.lgstatic.com/i/image3/M01/0F/5C/Ciqah16VdruAD-KcAABUSaeaBRs555.png"></span></p>
+<p><br></p>
+<h2><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">使用synchronized关键字修饰操作 </span></p></h2>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";"><img src="https://s0.lgstatic.com/i/image3/M01/0F/5B/Ciqah16VddqAZjI3AABvL6kb5Nk043.png"></span></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><br></p>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">通过以上两种方式，都可以使 setValue 和 getValue 符合 happens-before 原则——当在某一线程中调用 setValue 后，再在其他线程中调用 getValue 获取的值一定是 1。</span></p>
+<h1><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">总结</span></p></h1>
+<p style="line-height: 1.7;margin-bottom: 0pt;margin-top: 0pt;font-size: 11pt;color: #494949;"><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">本课时我们主要介绍了以下几点：</span></p>
+<ul>
+ <li><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">Java 内存模型的来源：主要是因为 CPU 缓存和指令重排等优化会造成多线程程序结果不可控。</span></p></li>
+ <li><p><span style="color: rgb(63, 63, 63); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">Java 内存模型是什么：本质上它就是一套规范，在这套规范中有一条最重要的 happens-before 原则。 </span></p></li>
+ <li><p><span style="color: rgb(51, 51, 51); font-size: 16px; font-family: 微软雅黑, "Microsoft YaHei";">最后介绍了 Java 内存模型的使用，其中简单介绍了两种方式：volatile 和 synchronized。其实除了这两种方式，Java 还提供了很多关键字来实现 happens-before 原则，后续课时中将会详细介绍。 </span></p></li>
+</ul>
+</body>
+</html>
