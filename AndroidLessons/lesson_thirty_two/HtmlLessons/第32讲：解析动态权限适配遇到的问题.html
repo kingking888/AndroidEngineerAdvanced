@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>第32讲：解析动态权限适配遇到的问题</title>
+</head>
+<body>
+    <p data-nodeid="825" class="">在 Android 6.0 也就是 API 版本 23 之前，App 需要的权限都会在安装阶段向用户展示。而在 App 运行期间则不需要动态判断权限是否已申请。从 6.0 之后的版本开始，Android 系统做了一次大的改动，对于部分权限，App 需要在代码中动态申请相应的权限。</p>
+    <h3 data-nodeid="826">权限分类</h3>
+    <p data-nodeid="827">Android 权限分 2 种：普通权限和危险权限，这 2 种权限都需要在 AndroidManifest 清单文件中声明。</p>
+    <ul data-nodeid="828">
+    <li data-nodeid="829">
+    <p data-nodeid="830"><strong data-nodeid="904">普通权限（Normal Permission）</strong></p>
+    </li>
+    </ul>
+    <p data-nodeid="831">在程序运行时期自动获取，只需要在清单文件中声明即可。最常用的就是 INTERNET 网络权限。</p>
+    <ul data-nodeid="832">
+    <li data-nodeid="833">
+    <p data-nodeid="834"><strong data-nodeid="909">危险权限（Dangerous Permission）</strong></p>
+    </li>
+    </ul>
+    <p data-nodeid="835">App 中可能存在一些操作会查看与用户隐私相关的信息，比如查看用户的通讯录或者图库等。对于这一类操作，Android 系统要求 App 主动向用户展示操作所需要的权限，只有用户授权之后才可以进行下一步操作，这样就保证了用户的隐私信息不会被轻易窃取。</p>
+    <h3 data-nodeid="836">权限动态申请流程</h3>
+    <p data-nodeid="1652">一次完整的权限申请流程如下图所示：</p>
+    <p data-nodeid="1653" class="te-preview-highlight"><img src="https://s0.lgstatic.com/i/image/M00/2F/68/Ciqc1F8G3YGAJrl1AACChv-T4dA120.png" alt="1111.png" data-nodeid="1657"></p>
+
+
+    <p data-nodeid="839">接下来，我们对权限申请流程做一个简要说明：</p>
+    <ol data-nodeid="840">
+    <li data-nodeid="841">
+    <p data-nodeid="842">判断 API 版本是否小于 23。</p>
+    </li>
+    <li data-nodeid="843">
+    <p data-nodeid="844">如果版本低于 23，则不需要动态申请权限，否则调用 checkSelfPermission() 方法检查权限是否已申请。</p>
+    </li>
+    <li data-nodeid="845">
+    <p data-nodeid="846">如果 checkSelfPermission 返回 false，说明权限并没有申请，此时需要调用requestPermission方法主动发送申请权限的操作。</p>
+    </li>
+    </ol>
+    <p data-nodeid="847">上述图片描述的流程中，在调用 requestPermission 方法申请权限之前，还有一步比较重要的操作：判断是否需要展示 shouldShowRequestPermissionRationale</p>
+    <h3 data-nodeid="848">shouldShowRequestPermissionRationale</h3>
+    <p data-nodeid="849">shouldShowRequestPermissionRationale 这个方法会返回以下两种情况</p>
+    <ul data-nodeid="850">
+    <li data-nodeid="851">
+    <p data-nodeid="852">返回 true：用户之前在申请权限操作时，点击了“拒绝”按钮，但是没有选中“Never ask again”选项。</p>
+    </li>
+    <li data-nodeid="853">
+    <p data-nodeid="854">返回 false：有 2 种情况会返回 false，其一是用户从来没有申请过此权限；二是用户之前选中拒绝，并且勾选了“Never ask again”选项。</p>
+    </li>
+    </ul>
+    <p data-nodeid="855">针对返回 true 的情况很容易处理，这种情况表示用户已经拒绝过申请操作，但是并没有选中“Never ask again”选项，因此我们只需要再次调用 requestPermission 方法申请权限即可，系统会自动弹出申请权限的对话框。</p>
+    <p data-nodeid="856">但是对于返回 false 的情况稍微麻烦一点，因为有 2 种情况会返回 false，而针对这 2 种情况所对应的相应反馈操作也不一样。比如如果用户从来没有申请过此权限，那就同上述返回 true 的操作一样，直接调用 requestPermission 方法申请权限即可；但是如果是因为用户之前拒绝申请操作，并且勾选“Never ask again”选项，此时我们不应该再执行 requestPermission 方法，而是应该弹出自定义的对话框，提示用户此操作必须通过权限申请之后才可继续进行，并给用户提供进入权限设置界面的入口。</p>
+    <blockquote data-nodeid="857">
+    <p data-nodeid="858">需要注意的一点是 shouldShowRequestPermissionRationale 返回 true 的情况在很多国内厂商的手机中设置了自动屏蔽，也就是没有返回 true 的情况，比如华为、小米等手机。</p>
+    </blockquote>
+    <h3 data-nodeid="859">代码演示</h3>
+    <p data-nodeid="860">接下来我们以申请通讯录权限为例来演示如何进行动态权限适配，首先需要判断系统版本是否高于 23，代码如下：</p>
+    <p data-nodeid="861"><img src="https://s0.lgstatic.com/i/image/M00/2F/52/CgqCHl8Gv6yAQZ_OAADjBdhnuiM380.png" alt="Drawing 1.png" data-nodeid="932"></p>
+    <p data-nodeid="862">只有在高于 23 版本的系统中才需要动态申请权限，在申请之前还需要检查当前 App 是否已经获取到相应的权限，避免重复申请，如下所示：</p>
+    <p data-nodeid="863"><img src="https://s0.lgstatic.com/i/image/M00/2F/47/Ciqc1F8Gv7OAaOl5AAFtm5WoMi8929.png" alt="Drawing 2.png" data-nodeid="936"></p>
+    <p data-nodeid="864">上图中的 PackageManager.PERMISSION_GRANTED 表示权限已获取。</p>
+    <p data-nodeid="865">接下来就是申请权限的流程，上文中已经介绍在申请权限之前，需要调用 shouldShowRequestPermissionRationale 方法判断用户之前的操作，因此代码修改如下：</p>
+    <p data-nodeid="866"><img src="https://s0.lgstatic.com/i/image/M00/2F/47/Ciqc1F8Gv7uAWrNAAAJ2uuU_dG4235.png" alt="Drawing 3.png" data-nodeid="943"></p>
+    <p data-nodeid="867">图中 1 处 shouldShowRequestPermissionRationale 返回 true，直接调用 requestPermission 再次申请权限即可。但是对于返回 false 的情况需要特殊处理，因为有 2 种情况返回 false。我们可以借助于 SharedPreference 来判断是否为用户第一次申请权限的操作，代码如下所示：</p>
+    <p data-nodeid="868"><img src="https://s0.lgstatic.com/i/image/M00/2F/47/Ciqc1F8Gv8OAaueXAASkAMqGrG0285.png" alt="Drawing 4.png" data-nodeid="947"></p>
+    <p data-nodeid="869">上图中使用 SharedPreference 来保存用户是否是第一次申请权限的状态值，默认情况为 true，当执行一次申请权限操作之后需要将其设置为 false。</p>
+    <h3 data-nodeid="870">权限申请操作封装</h3>
+    <p data-nodeid="871">App 中会存在很多调用危险权限的代码，如果每一次执行这些代码都复制粘贴上图中的权限申请代码，会显得代码很冗余。因此我们可以将动态权限申请的操作封装到工程中的某个 Util 类中，并提供给调用者相应的回调接口。部分核心代码如下：</p>
+    <p data-nodeid="872"><img src="https://s0.lgstatic.com/i/image/M00/2F/52/CgqCHl8Gv8-AYZiTAAzY68oUW5Q902.png" alt="Drawing 5.png" data-nodeid="953"></p>
+    <p data-nodeid="873">最后只需要在 BaseActivity 中，调用此方法时传入具体实现的 PermissionRequestListener 即可，如下所示：</p>
+    <p data-nodeid="874"><img src="https://s0.lgstatic.com/i/image/M00/2F/52/CgqCHl8Gv9aAAZZ2AAmHrI_zkLk847.png" alt="Drawing 6.png" data-nodeid="957"></p>
+    <h3 data-nodeid="875">三方库使用</h3>
+    <p data-nodeid="876">同之前的 LogUtils 课时内容一样，对于 Permission 的动态申请也可以借助于开源的三方库来加快开发速度。目前对 Permission 动态申请支持比较好的开源库有以下几个：</p>
+    <ul data-nodeid="877">
+    <li data-nodeid="878">
+    <p data-nodeid="879"><a href="https://github.com/Karumi/Dexter" data-nodeid="962">Dexter</a></p>
+    </li>
+    <li data-nodeid="880">
+    <p data-nodeid="881"><a href="https://github.com/googlesamples/easypermissions" data-nodeid="965">easypermissions</a></p>
+    </li>
+    <li data-nodeid="882">
+    <p data-nodeid="883"><a href="https://github.com/permissions-dispatcher/PermissionsDispatcher" data-nodeid="968">PermissionsDispatcher</a></p>
+    </li>
+    </ul>
+    <p data-nodeid="884">但是三方库的使用也具有一定的隐患，因为不同版本中 Android 系统对 Permission 的处理政策并不完全一致，以后在新版本的系统中很有可能会添加对权限申请更严格的请求策略。比如在 Android 10 中，Android 系统就增加了对外置存储访问的限制，正常情况下我们可以通过以下代码获取外置存储的根路径：</p>
+    <pre class="lang-java" data-nodeid="885"><code data-language="java">Environment.getExternalStorageDirectory().getAbsolutePath
+    </code></pre>
+    <p data-nodeid="886">然后在此目录下创建 App 相应的文件夹缓存数据，但是从 Android10（API 29）开始，App 层已经没有访问此路径的权限，无论你在 AndroidManifest.xml 文件中加上对应的权限还是使用 ActivityCompat.requestPermissions 动态申请到权限都无法实现访问。目前官方提供的临时解决方案就是在 AndroidManifest 清单文件中添加如下设置：</p>
+    <p data-nodeid="887"><img src="https://s0.lgstatic.com/i/image/M00/2F/47/Ciqc1F8Gv-6AYLO4AABPhx3IiGQ762.png" alt="Drawing 7.png" data-nodeid="973"></p>
+    <p data-nodeid="888">但是如果我们使用的三方库处理动态权限申请操作的话，如果三方库并没有做版本适配，或者做了相应的适配修改，但是我们并没有升级三方库的版本，都会造成在 Android 10 中的设备上处理文件发生异常。</p>
+    <h3 data-nodeid="889">总结</h3>
+    <p data-nodeid="890">这节课介绍了 Android 系统中申请权限相关的知识点，主要是针对 Android 版本 23 之后的动态申请做了详细介绍，其中有以下几个方法需要掌握：</p>
+    <ul data-nodeid="891">
+    <li data-nodeid="892">
+    <p data-nodeid="893"><strong data-nodeid="981">checkSelfPermission</strong> 检查某权限是否已申请。</p>
+    </li>
+    <li data-nodeid="894">
+    <p data-nodeid="895"><strong data-nodeid="986">requestPermissions</strong> 主动发送申请权限的请求。</p>
+    </li>
+    <li data-nodeid="896">
+    <p data-nodeid="897"><strong data-nodeid="991">shouldShowRequestPermissionRationale</strong> 判断用户之前对申请权限做出的相应动作。</p>
+    </li>
+    </ul>
+</body>
+</html>
